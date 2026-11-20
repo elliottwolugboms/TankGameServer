@@ -1,7 +1,6 @@
-
 // ======================================================
 // TANK GAME - AUTHORITATIVE 2-PLAYER WEBSOCKET SERVER
-// Supports room codes: HOST and JOIN
+// Existing Godot map: map01
 // ======================================================
 
 const { WebSocketServer } = require("ws");
@@ -9,20 +8,42 @@ const crypto = require("crypto");
 
 const PORT = process.env.PORT || 8080;
 
-// ---------------- CONFIGURATION ----------------
+// ---------------- MAP CONFIGURATION ----------------
 
-const W = 1280;
-const H = 720;
+// Existing Godot map boundaries.
+const MAP_LEFT = 0;
+const MAP_TOP = -256;
+const MAP_WIDTH = 5376;
+const MAP_HEIGHT = 1664;
+
+const MAP_RIGHT = MAP_LEFT + MAP_WIDTH;
+const MAP_BOTTOM = MAP_TOP + MAP_HEIGHT;
+
+// Existing Godot spawn positions.
+const SPAWNS = [
+    { x: 320, y: 20, angle: 0 },
+    { x: 3920, y: 961, angle: Math.PI }
+];
+
+// ---------------- TANK CONFIGURATION ----------------
 
 const TANK_R = 22;
-const MOVE_SPEED = 180;
-const TURN_SPEED = 2.6;
+
+const MOVE_SPEED = 200;
+const ACCELERATION = 800;
+const FRICTION = 1000;
+const TURN_SPEED = 10;
+
 const MAX_HP = 100;
+
+// ---------------- BULLET CONFIGURATION ----------------
 
 const BULLET_SPEED = 600;
 const BULLET_DMG = 25;
 const BULLET_LIFE = 1.5;
 const FIRE_COOLDOWN = 0.5;
+
+// ---------------- GAME LOOP ----------------
 
 const TICK = 1 / 60;
 const SEND_EVERY = 3;
@@ -31,9 +52,22 @@ const SEND_EVERY = 3;
 
 const rooms = new Map();
 
+// ---------------- ANGLE HELPER ----------------
+
+function lerpAngle(from, to, weight) {
+    const difference = Math.atan2(
+        Math.sin(to - from),
+        Math.cos(to - from)
+    );
+
+    return from + difference * Math.max(0, Math.min(1, weight));
+}
+
 // ---------------- TANK CREATION ----------------
 
 function makeTank(index, playerId) {
+    const spawn = SPAWNS[index];
+
     return {
         playerId,
         ws: null,
@@ -43,17 +77,18 @@ function makeTank(index, playerId) {
         shots: 0,
         cooldown: 0,
 
-        x: index === 0 ? 200 : W - 200,
-        y: H / 2,
+        x: spawn.x,
+        y: spawn.y,
 
-        angle: index === 0 ? 0 : Math.PI,
-        turretAngle: index === 0 ? 0 : Math.PI,
+        vx: 0,
+        vy: 0,
+
+        angle: spawn.angle,
+        turretAngle: spawn.angle,
 
         input: {
-            up: false,
-            down: false,
-            left: false,
-            right: false,
+            moveX: 0,
+            moveY: 0,
             fire: false
         }
     };
@@ -122,7 +157,6 @@ function createRoom(ws, playerId) {
     tank.ws = ws;
 
     room.tanks.push(tank);
-
     rooms.set(roomCode, room);
 
     console.log("Room created:", roomCode);
@@ -133,10 +167,7 @@ function createRoom(ws, playerId) {
         playerId
     });
 
-    return {
-        room,
-        tank
-    };
+    return { room, tank };
 }
 
 // ---------------- JOIN ROOM ----------------
@@ -187,10 +218,7 @@ function joinRoom(ws, playerId, roomCode) {
 
     console.log("Game started:", roomCode);
 
-    return {
-        room,
-        tank
-    };
+    return { room, tank };
 }
 
 // ---------------- END GAME ----------------
@@ -228,50 +256,101 @@ function step(room) {
 
     if (!a || !b) return;
 
-    // Move tanks
+    // Move tanks.
     for (const tank of room.tanks) {
         const input = tank.input;
 
-        if (input.left) {
-            tank.angle -= TURN_SPEED * TICK;
-        }
-
-        if (input.right) {
-            tank.angle += TURN_SPEED * TICK;
-        }
-
-        const direction =
-            (input.up ? 1 : 0) -
-            (input.down ? 1 : 0);
-
-        tank.x +=
-            Math.cos(tank.angle) *
-            direction *
-            MOVE_SPEED *
-            TICK;
-
-        tank.y +=
-            Math.sin(tank.angle) *
-            direction *
-            MOVE_SPEED *
-            TICK;
-
-        tank.x = Math.max(
-            TANK_R,
-            Math.min(W - TANK_R, tank.x)
+        const direction = Math.hypot(
+            input.moveX,
+            input.moveY
         );
 
-        tank.y = Math.max(
-            TANK_R,
-            Math.min(H - TANK_R, tank.y)
-        );
+        if (direction > 0.01) {
+            const moveX = input.moveX / direction;
+            const moveY = input.moveY / direction;
+
+            const targetAngle =
+                Math.atan2(moveY, moveX) + Math.PI / 2;
+
+            tank.angle = lerpAngle(
+                tank.angle,
+                targetAngle,
+                TURN_SPEED * TICK
+            );
+
+            tank.vx += moveX * ACCELERATION * TICK;
+            tank.vy += moveY * ACCELERATION * TICK;
+
+            const velocityLength = Math.hypot(
+                tank.vx,
+                tank.vy
+            );
+
+            if (velocityLength > MOVE_SPEED) {
+                tank.vx =
+                    tank.vx / velocityLength * MOVE_SPEED;
+
+                tank.vy =
+                    tank.vy / velocityLength * MOVE_SPEED;
+            }
+        } else {
+            const velocityLength = Math.hypot(
+                tank.vx,
+                tank.vy
+            );
+
+            if (velocityLength > 0) {
+                const newLength = Math.max(
+                    0,
+                    velocityLength - FRICTION * TICK
+                );
+
+                if (velocityLength > 0) {
+                    tank.vx =
+                        tank.vx / velocityLength * newLength;
+
+                    tank.vy =
+                        tank.vy / velocityLength * newLength;
+                }
+            }
+        }
+
+        tank.x += tank.vx * TICK;
+        tank.y += tank.vy * TICK;
+
+        // Keep tanks inside the map.
+        const minX = MAP_LEFT + TANK_R;
+        const maxX = MAP_RIGHT - TANK_R;
+
+        const minY = MAP_TOP + TANK_R;
+        const maxY = MAP_BOTTOM - TANK_R;
+
+        if (tank.x < minX) {
+            tank.x = minX;
+            tank.vx = 0;
+        }
+
+        if (tank.x > maxX) {
+            tank.x = maxX;
+            tank.vx = 0;
+        }
+
+        if (tank.y < minY) {
+            tank.y = minY;
+            tank.vy = 0;
+        }
+
+        if (tank.y > maxY) {
+            tank.y = maxY;
+            tank.vy = 0;
+        }
 
         tank.cooldown = Math.max(
             0,
             tank.cooldown - TICK
         );
 
-        // Fire bullets using turret direction
+        // Fire using independent turret direction.
         if (input.fire && tank.cooldown <= 0) {
             tank.cooldown = FIRE_COOLDOWN;
 
@@ -293,7 +372,7 @@ function step(room) {
         }
     }
 
-    // Move bullets and detect collisions
+    // Move bullets and detect tank collisions.
     room.bullets = room.bullets.filter(bullet => {
         bullet.x += bullet.vx * TICK;
         bullet.y += bullet.vy * TICK;
@@ -302,10 +381,10 @@ function step(room) {
 
         if (
             bullet.life <= 0 ||
-            bullet.x < 0 ||
-            bullet.x > W ||
-            bullet.y < 0 ||
-            bullet.y > H
+            bullet.x < MAP_LEFT ||
+            bullet.x > MAP_RIGHT ||
+            bullet.y < MAP_TOP ||
+            bullet.y > MAP_BOTTOM
         ) {
             return false;
         }
@@ -328,7 +407,7 @@ function step(room) {
         return true;
     });
 
-    // Check for defeated players
+    // Check defeated players.
     const dead = room.tanks.filter(
         tank => tank.hp <= 0
     );
@@ -339,9 +418,7 @@ function step(room) {
             dead[0] === a ? b : a,
             "score"
         );
-    }
-
-    else if (dead.length === 2) {
+    } else if (dead.length === 2) {
         const winner =
             a.dmgDealt !== b.dmgDealt
                 ? (a.dmgDealt > b.dmgDealt ? a : b)
@@ -494,30 +571,46 @@ wss.on("connection", ws => {
         ) {
             const input = message.input || {};
 
+            // New directional input from Godot.
+            let moveX = Number(input.moveX);
+            let moveY = Number(input.moveY);
+
+            // Compatibility with the older input format.
+            if (!Number.isFinite(moveX) || !Number.isFinite(moveY)) {
+                moveX =
+                    (input.right ? 1 : 0) -
+                    (input.left ? 1 : 0);
+
+                moveY =
+                    (input.down ? 1 : 0) -
+                    (input.up ? 1 : 0);
+            }
+
+            const length = Math.hypot(moveX, moveY);
+
+            if (length > 1) {
+                moveX /= length;
+                moveY /= length;
+            }
+
             tank.input = {
-                up: !!input.up,
-                down: !!input.down,
-                left: !!input.left,
-                right: !!input.right,
+                moveX,
+                moveY,
                 fire: !!input.fire
             };
 
-            // Accept independent turret direction.
             if (
                 typeof input.turretAngle === "number" &&
                 Number.isFinite(input.turretAngle)
             ) {
                 tank.turretAngle = input.turretAngle;
-            } else {
-                tank.turretAngle = tank.angle;
             }
 
             return;
         }
     });
 
-    // ---------------- DISCONNECT ----------------
-
+    // DISCONNECT
     ws.on("close", () => {
         console.log("Player disconnected.");
 
@@ -527,7 +620,6 @@ wss.on("connection", ws => {
 
         tank.ws = null;
 
-        // Host disconnected before the game started.
         if (!room.running) {
             rooms.delete(room.roomCode);
 
@@ -539,7 +631,6 @@ wss.on("connection", ws => {
             return;
         }
 
-        // Opponent wins by forfeit.
         const opponent = room.tanks.find(
             other => other !== tank
         );
