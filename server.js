@@ -1,3 +1,4 @@
+
 const { WebSocketServer } = require("ws");
 const crypto = require("crypto");
 const fs = require("fs");
@@ -182,8 +183,6 @@ function isRoadAt(worldX, worldY) {
 
 function canTankOccupy(x, y) {
 
-    // Keep the tank inside the map.
-
     if (
         x - TANK_R < MAP_LEFT ||
         x + TANK_R > MAP_RIGHT ||
@@ -193,16 +192,11 @@ function canTankOccupy(x, y) {
         return false;
     }
 
-    // Tank centre must be on the road.
-
     if (!isRoadAt(x, y)) {
         return false;
     }
 
-    // Smaller collision footprint for smoother turns.
-
     const collisionRadius = TANK_R * 0.65;
-
     const samples = 12;
 
     for (let i = 0; i < samples; i++) {
@@ -235,8 +229,6 @@ function moveTankOnRoad(tank, deltaX, deltaY) {
         return;
     }
 
-    // Maximum movement per check: 2 pixels.
-
     const maxStep = ROAD_CELL_SIZE * 0.5;
 
     const steps = Math.max(
@@ -255,8 +247,6 @@ function moveTankOnRoad(tank, deltaX, deltaY) {
         const nextX = tank.x + stepX;
         const nextY = tank.y + stepY;
 
-        // Try moving in both directions.
-
         if (canTankOccupy(nextX, nextY)) {
 
             tank.x = nextX;
@@ -264,8 +254,6 @@ function moveTankOnRoad(tank, deltaX, deltaY) {
 
             continue;
         }
-
-        // If diagonal movement is blocked, try X.
 
         if (
             !blockedX &&
@@ -282,8 +270,6 @@ function moveTankOnRoad(tank, deltaX, deltaY) {
                 tank.vx = 0;
             }
         }
-
-        // Then try Y from the updated position.
 
         if (
             !blockedY &&
@@ -704,6 +690,10 @@ function step(room) {
 
             room.bullets.push({
 
+                // NEW: UNIQUE BULLET ID
+
+                id: crypto.randomUUID(),
+
                 x: tank.x + directionX * 30,
                 y: tank.y + directionY * 30,
 
@@ -752,7 +742,11 @@ function step(room) {
 
         if (distance < TANK_R) {
 
-            target.hp -= BULLET_DMG;
+            target.hp = Math.max(
+                0,
+                target.hp - BULLET_DMG
+            );
+
             bullet.owner.dmgDealt += BULLET_DMG;
 
             return false;
@@ -812,10 +806,19 @@ function snapshot(room) {
             hp: tank.hp
         })),
 
+        // NEW: BULLET ID, POSITION AND DIRECTION
+
         bullets: room.bullets.map(bullet => ({
 
+            id: bullet.id,
+
             x: bullet.x,
-            y: bullet.y
+            y: bullet.y,
+
+            angle: Math.atan2(
+                bullet.vy,
+                bullet.vx
+            )
         }))
     };
 }
