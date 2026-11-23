@@ -45,9 +45,11 @@ if (
 }
 
 const ROAD_BITS = Buffer.from(roadMask.mask, "base64");
+
 const ROAD_CELL_SIZE = roadMask.cell_size;
 const ROAD_WIDTH = roadMask.width;
 const ROAD_HEIGHT = roadMask.height;
+
 const ROAD_LEFT = roadMask.map_left;
 const ROAD_TOP = roadMask.map_top;
 
@@ -174,7 +176,14 @@ function isRoadAt(worldX, worldY) {
     return (ROAD_BITS[byteIndex] & (1 << bitOffset)) !== 0;
 }
 
+// ======================================================
+// CHECK IF TANK CAN OCCUPY A POSITION
+// ======================================================
+
 function canTankOccupy(x, y) {
+
+    // Keep the tank inside the map.
+
     if (
         x - TANK_R < MAP_LEFT ||
         x + TANK_R > MAP_RIGHT ||
@@ -184,28 +193,30 @@ function canTankOccupy(x, y) {
         return false;
     }
 
+    // Tank centre must be on the road.
+
     if (!isRoadAt(x, y)) {
         return false;
     }
 
-    const radii = [
-        TANK_R * 0.55,
-        TANK_R * 0.82,
-        TANK_R
-    ];
+    // Smaller collision footprint for smoother turns.
 
-    const samples = 16;
+    const collisionRadius = TANK_R * 0.65;
 
-    for (const radius of radii) {
-        for (let i = 0; i < samples; i++) {
-            const angle = (Math.PI * 2 * i) / samples;
+    const samples = 12;
 
-            const sampleX = x + Math.cos(angle) * radius;
-            const sampleY = y + Math.sin(angle) * radius;
+    for (let i = 0; i < samples; i++) {
 
-            if (!isRoadAt(sampleX, sampleY)) {
-                return false;
-            }
+        const angle = (Math.PI * 2 * i) / samples;
+
+        const sampleX =
+            x + Math.cos(angle) * collisionRadius;
+
+        const sampleY =
+            y + Math.sin(angle) * collisionRadius;
+
+        if (!isRoadAt(sampleX, sampleY)) {
+            return false;
         }
     }
 
@@ -217,36 +228,79 @@ function canTankOccupy(x, y) {
 // ======================================================
 
 function moveTankOnRoad(tank, deltaX, deltaY) {
-    const nextX = tank.x + deltaX;
-    const nextY = tank.y + deltaY;
 
-    if (canTankOccupy(nextX, nextY)) {
-        tank.x = nextX;
-        tank.y = nextY;
+    const distance = Math.hypot(deltaX, deltaY);
+
+    if (distance <= 0.0001) {
         return;
     }
 
-    let movedX = false;
-    let movedY = false;
+    // Maximum movement per check: 2 pixels.
 
-    if (
-        Math.abs(deltaX) > 0.0001 &&
-        canTankOccupy(nextX, tank.y)
-    ) {
-        tank.x = nextX;
-        movedX = true;
+    const maxStep = ROAD_CELL_SIZE * 0.5;
+
+    const steps = Math.max(
+        1,
+        Math.ceil(distance / maxStep)
+    );
+
+    const stepX = deltaX / steps;
+    const stepY = deltaY / steps;
+
+    let blockedX = false;
+    let blockedY = false;
+
+    for (let i = 0; i < steps; i++) {
+
+        const nextX = tank.x + stepX;
+        const nextY = tank.y + stepY;
+
+        // Try moving in both directions.
+
+        if (canTankOccupy(nextX, nextY)) {
+
+            tank.x = nextX;
+            tank.y = nextY;
+
+            continue;
+        }
+
+        // If diagonal movement is blocked, try X.
+
+        if (
+            !blockedX &&
+            Math.abs(stepX) > 0.0001
+        ) {
+
+            if (canTankOccupy(nextX, tank.y)) {
+
+                tank.x = nextX;
+
+            } else {
+
+                blockedX = true;
+                tank.vx = 0;
+            }
+        }
+
+        // Then try Y from the updated position.
+
+        if (
+            !blockedY &&
+            Math.abs(stepY) > 0.0001
+        ) {
+
+            if (canTankOccupy(tank.x, nextY)) {
+
+                tank.y = nextY;
+
+            } else {
+
+                blockedY = true;
+                tank.vy = 0;
+            }
+        }
     }
-
-    if (
-        Math.abs(deltaY) > 0.0001 &&
-        canTankOccupy(tank.x, nextY)
-    ) {
-        tank.y = nextY;
-        movedY = true;
-    }
-
-    if (!movedX) tank.vx = 0;
-    if (!movedY) tank.vy = 0;
 }
 
 // ======================================================
@@ -254,6 +308,7 @@ function moveTankOnRoad(tank, deltaX, deltaY) {
 // ======================================================
 
 function resolveTankCollision(a, b) {
+
     const originalA = {
         x: a.x,
         y: a.y,
@@ -282,9 +337,12 @@ function resolveTankCollision(a, b) {
     let normalY;
 
     if (distance < 0.001) {
+
         normalX = 1;
         normalY = 0;
+
     } else {
+
         normalX = dx / distance;
         normalY = dy / distance;
     }
@@ -306,6 +364,7 @@ function resolveTankCollision(a, b) {
         relativeVelocityY * normalY;
 
     if (closingSpeed < 0) {
+
         const impulse = -closingSpeed / 2;
 
         a.vx -= impulse * normalX;
@@ -318,7 +377,11 @@ function resolveTankCollision(a, b) {
     keepTankInsideMap(a);
     keepTankInsideMap(b);
 
-    if (!canTankOccupy(a.x, a.y) || !canTankOccupy(b.x, b.y)) {
+    if (
+        !canTankOccupy(a.x, a.y) ||
+        !canTankOccupy(b.x, b.y)
+    ) {
+
         Object.assign(a, originalA);
         Object.assign(b, originalB);
     }
@@ -329,6 +392,7 @@ function resolveTankCollision(a, b) {
 // ======================================================
 
 function makeTank(index, playerId) {
+
     const spawn = SPAWNS[index];
 
     return {
@@ -362,18 +426,21 @@ function makeTank(index, playerId) {
 // ======================================================
 
 function send(ws, message) {
+
     if (ws && ws.readyState === 1) {
         ws.send(JSON.stringify(message));
     }
 }
 
 function broadcast(room, message) {
+
     for (const tank of room.tanks) {
         send(tank.ws, message);
     }
 }
 
 function sendError(ws, message) {
+
     send(ws, {
         type: "error",
         message
@@ -385,18 +452,22 @@ function sendError(ws, message) {
 // ======================================================
 
 function generateRoomCode() {
+
     const characters = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
     let code;
 
     do {
+
         code = "";
 
         for (let i = 0; i < 6; i++) {
+
             code += characters[
                 crypto.randomInt(0, characters.length)
             ];
         }
+
     } while (rooms.has(code));
 
     return code;
@@ -407,6 +478,7 @@ function generateRoomCode() {
 // ======================================================
 
 function createRoom(ws, playerId) {
+
     const roomCode = generateRoomCode();
 
     const room = {
@@ -445,6 +517,7 @@ function createRoom(ws, playerId) {
 // ======================================================
 
 function joinRoom(ws, playerId, roomCode) {
+
     const room = rooms.get(roomCode);
 
     if (!room) {
@@ -500,6 +573,7 @@ function joinRoom(ws, playerId, roomCode) {
 // ======================================================
 
 function finish(room, winner, decidedBy) {
+
     if (room.over) return;
 
     room.over = true;
@@ -530,13 +604,17 @@ function finish(room, winner, decidedBy) {
 // ======================================================
 
 function step(room) {
+
     const [a, b] = room.tanks;
 
     if (!a || !b) return;
 
+    // ==================================================
     // MOVE TANKS
+    // ==================================================
 
     for (const tank of room.tanks) {
+
         const input = tank.input;
 
         const direction = Math.hypot(
@@ -545,6 +623,7 @@ function step(room) {
         );
 
         if (direction > 0.01) {
+
             const moveX = input.moveX / direction;
             const moveY = input.moveY / direction;
 
@@ -566,19 +645,23 @@ function step(room) {
             );
 
             if (velocityLength > MOVE_SPEED) {
+
                 tank.vx =
                     tank.vx / velocityLength * MOVE_SPEED;
 
                 tank.vy =
                     tank.vy / velocityLength * MOVE_SPEED;
             }
+
         } else {
+
             const velocityLength = Math.hypot(
                 tank.vx,
                 tank.vy
             );
 
             if (velocityLength > 0) {
+
                 const newLength = Math.max(
                     0,
                     velocityLength - FRICTION * TICK
@@ -602,6 +685,8 @@ function step(room) {
 
         keepTankInsideMap(tank);
 
+        // UPDATE SHOOTING COOLDOWN
+
         tank.cooldown = Math.max(
             0,
             tank.cooldown - TICK
@@ -610,6 +695,7 @@ function step(room) {
         // SHOOTING
 
         if (input.fire && tank.cooldown <= 0) {
+
             tank.cooldown = FIRE_COOLDOWN;
             tank.shots++;
 
@@ -617,6 +703,7 @@ function step(room) {
             const directionY = Math.sin(tank.turretAngle);
 
             room.bullets.push({
+
                 x: tank.x + directionX * 30,
                 y: tank.y + directionY * 30,
 
@@ -629,13 +716,18 @@ function step(room) {
         }
     }
 
+    // ==================================================
     // TANK-TO-TANK COLLISION
+    // ==================================================
 
     resolveTankCollision(a, b);
 
+    // ==================================================
     // BULLET MOVEMENT AND COLLISION
+    // ==================================================
 
     room.bullets = room.bullets.filter(bullet => {
+
         bullet.x += bullet.vx * TICK;
         bullet.y += bullet.vy * TICK;
 
@@ -659,27 +751,34 @@ function step(room) {
         );
 
         if (distance < TANK_R) {
+
             target.hp -= BULLET_DMG;
             bullet.owner.dmgDealt += BULLET_DMG;
+
             return false;
         }
 
         return true;
     });
 
+    // ==================================================
     // CHECK DEFEATED PLAYERS
+    // ==================================================
 
     const dead = room.tanks.filter(
         tank => tank.hp <= 0
     );
 
     if (dead.length === 1) {
+
         finish(
             room,
             dead[0] === a ? b : a,
             "score"
         );
+
     } else if (dead.length === 2) {
+
         const winner =
             a.dmgDealt !== b.dmgDealt
                 ? (a.dmgDealt > b.dmgDealt ? a : b)
@@ -696,10 +795,12 @@ function step(room) {
 // ======================================================
 
 function snapshot(room) {
+
     return {
         type: "state",
 
         tanks: room.tanks.map(tank => ({
+
             id: tank.playerId,
 
             x: tank.x,
@@ -712,6 +813,7 @@ function snapshot(room) {
         })),
 
         bullets: room.bullets.map(bullet => ({
+
             x: bullet.x,
             y: bullet.y
         }))
@@ -723,7 +825,9 @@ function snapshot(room) {
 // ======================================================
 
 setInterval(() => {
+
     for (const room of rooms.values()) {
+
         if (!room.running || room.over) {
             continue;
         }
@@ -736,6 +840,7 @@ setInterval(() => {
             broadcast(room, snapshot(room));
         }
     }
+
 }, TICK * 1000);
 
 // ======================================================
@@ -747,24 +852,32 @@ const wss = new WebSocketServer({
 });
 
 wss.on("connection", ws => {
+
     console.log("New player connected.");
 
     let tank = null;
     let room = null;
 
     ws.on("message", raw => {
+
         let message;
 
         try {
+
             message = JSON.parse(raw.toString());
+
         } catch {
+
             sendError(ws, "Invalid message format.");
             return;
         }
 
+        // ==============================================
         // HOST
+        // ==============================================
 
         if (message.type === "host") {
+
             if (tank) {
                 sendError(ws, "You are already in a room.");
                 return;
@@ -775,6 +888,7 @@ wss.on("connection", ws => {
                 !message.playerId ||
                 message.playerId.length > 64
             ) {
+
                 sendError(ws, "Invalid player ID.");
                 return;
             }
@@ -790,9 +904,12 @@ wss.on("connection", ws => {
             return;
         }
 
+        // ==============================================
         // JOIN
+        // ==============================================
 
         if (message.type === "join_room") {
+
             if (tank) {
                 sendError(ws, "You are already in a room.");
                 return;
@@ -803,6 +920,7 @@ wss.on("connection", ws => {
                 !message.playerId ||
                 message.playerId.length > 64
             ) {
+
                 sendError(ws, "Invalid player ID.");
                 return;
             }
@@ -830,7 +948,9 @@ wss.on("connection", ws => {
             return;
         }
 
+        // ==============================================
         // PLAYER INPUT
+        // ==============================================
 
         if (
             message.type === "input" &&
@@ -839,6 +959,7 @@ wss.on("connection", ws => {
             room.running &&
             !room.over
         ) {
+
             const input = message.input || {};
 
             let moveX = Number(input.moveX);
@@ -848,6 +969,7 @@ wss.on("connection", ws => {
                 !Number.isFinite(moveX) ||
                 !Number.isFinite(moveY)
             ) {
+
                 moveX =
                     (input.right ? 1 : 0) -
                     (input.left ? 1 : 0);
@@ -865,8 +987,10 @@ wss.on("connection", ws => {
             }
 
             tank.input = {
+
                 moveX,
                 moveY,
+
                 fire: !!input.fire
             };
 
@@ -874,6 +998,7 @@ wss.on("connection", ws => {
                 typeof input.turretAngle === "number" &&
                 Number.isFinite(input.turretAngle)
             ) {
+
                 tank.turretAngle = input.turretAngle;
             }
 
@@ -881,9 +1006,12 @@ wss.on("connection", ws => {
         }
     });
 
+    // ==============================================
     // DISCONNECT
+    // ==============================================
 
     ws.on("close", () => {
+
         console.log("Player disconnected.");
 
         if (!tank || !room || room.over) {
@@ -893,6 +1021,7 @@ wss.on("connection", ws => {
         tank.ws = null;
 
         if (!room.running) {
+
             rooms.delete(room.roomCode);
 
             console.log(
@@ -912,7 +1041,12 @@ wss.on("connection", ws => {
         }
     });
 
+    // ==============================================
+    // WEBSOCKET ERROR
+    // ==============================================
+
     ws.on("error", error => {
+
         console.error(
             "WebSocket error:",
             error.message
