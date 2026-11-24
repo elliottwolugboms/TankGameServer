@@ -1,4 +1,3 @@
-
 const { WebSocketServer } = require("ws");
 const crypto = require("crypto");
 const fs = require("fs");
@@ -20,7 +19,6 @@ const MAP_BOTTOM = MAP_TOP + MAP_HEIGHT;
 
 // ======================================================
 // ROAD MASK
-// road_mask.json must be beside server.js.
 // ======================================================
 
 const ROAD_MASK_PATH = path.join(__dirname, "road_mask.json");
@@ -29,7 +27,7 @@ let roadMask;
 try {
     roadMask = JSON.parse(fs.readFileSync(ROAD_MASK_PATH, "utf8"));
 } catch (error) {
-    console.error("Could not load road_mask.json. Place it beside server.js.");
+    console.error("Could not load road_mask.json.");
     console.error(error.message);
     process.exit(1);
 }
@@ -83,7 +81,7 @@ const TURN_SPEED = 10;
 const MAX_HP = 100;
 
 // ======================================================
-// PLAYER BULLET CONFIGURATION
+// PLAYER BULLETS
 // ======================================================
 
 const BULLET_SPEED = 600;
@@ -92,7 +90,7 @@ const BULLET_LIFE = 1.5;
 const FIRE_COOLDOWN = 0.5;
 
 // ======================================================
-// AI ENEMY CONFIGURATION
+// AI ENEMIES
 // ======================================================
 
 const ENEMY_MAX_HP = 100;
@@ -120,6 +118,29 @@ const ENEMY_BULLETS = {
         lifetime: 1.2
     }
 };
+
+// ======================================================
+// PICKUP CONFIGURATION
+// ======================================================
+
+const PICKUP_DROP_CHANCE = 1.0;
+
+const PICKUP_WEIGHTS = {
+    ammo: 0.60,
+    health: 0.25,
+    shield: 0.15
+};
+
+const PICKUP_LIFETIME = 25.0;
+const PICKUP_RADIUS = 52;
+
+const MAX_AMMO = 15;
+const AMMO_REWARD = 15;
+
+const HEALTH_REWARD_PERCENT = 5;
+
+const SHIELD_MAX_HP = 50;
+const SHIELD_DURATION = 15.0;
 
 // ======================================================
 // GAME LOOP
@@ -212,7 +233,7 @@ function keepTankInsideMap(tank) {
 }
 
 // ======================================================
-// ROAD COLLISION SYSTEM
+// ROAD COLLISION
 // ======================================================
 
 function isRoadAt(worldX, worldY) {
@@ -242,7 +263,7 @@ function isRoadAt(worldX, worldY) {
 }
 
 // ======================================================
-// CHECK IF TANK CAN OCCUPY A POSITION
+// CHECK TANK POSITION
 // ======================================================
 
 function canTankOccupy(x, y) {
@@ -319,33 +340,21 @@ function moveTankOnRoad(tank, deltaX, deltaY) {
             continue;
         }
 
-        if (
-            !blockedX &&
-            Math.abs(stepX) > 0.0001
-        ) {
+        if (!blockedX && Math.abs(stepX) > 0.0001) {
 
             if (canTankOccupy(nextX, tank.y)) {
-
                 tank.x = nextX;
-
             } else {
-
                 blockedX = true;
                 tank.vx = 0;
             }
         }
 
-        if (
-            !blockedY &&
-            Math.abs(stepY) > 0.0001
-        ) {
+        if (!blockedY && Math.abs(stepY) > 0.0001) {
 
             if (canTankOccupy(tank.x, nextY)) {
-
                 tank.y = nextY;
-
             } else {
-
                 blockedY = true;
                 tank.vy = 0;
             }
@@ -377,9 +386,8 @@ function resolveTankCollision(a, b) {
     const dy = b.y - a.y;
 
     const distance = Math.hypot(dx, dy);
-    const minimumDistance = TANK_DIAMETER;
 
-    if (distance >= minimumDistance) {
+    if (distance >= TANK_DIAMETER) {
         return;
     }
 
@@ -387,17 +395,14 @@ function resolveTankCollision(a, b) {
     let normalY;
 
     if (distance < 0.001) {
-
         normalX = 1;
         normalY = 0;
-
     } else {
-
         normalX = dx / distance;
         normalY = dy / distance;
     }
 
-    const overlap = minimumDistance - distance;
+    const overlap = TANK_DIAMETER - distance;
     const correction = (overlap / 2) + 0.01;
 
     a.x -= normalX * correction;
@@ -431,7 +436,6 @@ function resolveTankCollision(a, b) {
         !canTankOccupy(a.x, a.y) ||
         !canTankOccupy(b.x, b.y)
     ) {
-
         Object.assign(a, originalA);
         Object.assign(b, originalB);
     }
@@ -450,6 +454,13 @@ function makeTank(index, playerId) {
         ws: null,
 
         hp: MAX_HP,
+
+        ammo: MAX_AMMO,
+        maxAmmo: MAX_AMMO,
+
+        shieldHp: 0,
+        shieldTimeLeft: 0,
+
         dmgDealt: 0,
         shots: 0,
         cooldown: 0,
@@ -566,19 +577,15 @@ function initializeEnemies(room, updates) {
             x,
             y,
 
-            // Original spawn position.
             spawnX: x,
             spawnY: y,
 
-            // Current rotations.
             a: angle,
             turretAngle,
 
-            // Original spawn rotations.
             spawnA: angle,
             spawnTurretAngle: turretAngle,
 
-            // Path progress.
             progress,
             spawnProgress: progress,
 
@@ -706,6 +713,228 @@ function createEnemyBullet(room, message) {
 }
 
 // ======================================================
+// PICKUP SYSTEM
+// ======================================================
+
+function createPickup(room, x, y) {
+
+    if (Math.random() > PICKUP_DROP_CHANCE) {
+        return;
+    }
+
+    const random = Math.random();
+
+    let type;
+
+    if (random < PICKUP_WEIGHTS.ammo) {
+        type = "ammo";
+    } else if (
+        random < PICKUP_WEIGHTS.ammo +
+        PICKUP_WEIGHTS.health
+    ) {
+        type = "health";
+    } else {
+        type = "shield";
+    }
+
+    const pickup = {
+        id: crypto.randomUUID(),
+        type,
+        x,
+        y,
+        expiresAt: Date.now() + PICKUP_LIFETIME * 1000
+    };
+
+    room.pickups.set(pickup.id, pickup);
+
+    console.log(
+        "PICKUP SPAWNED:",
+        type,
+        "at",
+        Math.round(x),
+        Math.round(y)
+    );
+}
+
+// ======================================================
+// REMOVE EXPIRED PICKUPS
+// ======================================================
+
+function updatePickups(room) {
+
+    const now = Date.now();
+    let changed = false;
+
+    for (const [id, pickup] of room.pickups) {
+
+        if (now >= pickup.expiresAt) {
+
+            room.pickups.delete(id);
+            changed = true;
+
+            console.log(
+                "PICKUP EXPIRED:",
+                pickup.type
+            );
+        }
+    }
+
+    return changed;
+}
+
+// ======================================================
+// COLLECT PICKUP
+// ======================================================
+
+function collectPickup(room, tank, pickupId) {
+
+    if (!room || !tank || tank.hp <= 0) {
+        return;
+    }
+
+    const pickup = room.pickups.get(pickupId);
+
+    if (!pickup) {
+        return;
+    }
+
+    const distance = Math.hypot(
+        tank.x - pickup.x,
+        tank.y - pickup.y
+    );
+
+    if (distance > PICKUP_RADIUS) {
+        return;
+    }
+
+    let collected = false;
+
+    // AMMO
+
+    if (pickup.type === "ammo") {
+
+        if (tank.ammo < tank.maxAmmo) {
+
+            const gained = Math.min(
+                AMMO_REWARD,
+                tank.maxAmmo - tank.ammo
+            );
+
+            tank.ammo += gained;
+            collected = true;
+
+            console.log(
+                tank.playerId,
+                "collected",
+                gained,
+                "bullets."
+            );
+        }
+    }
+
+    // HEALTH
+
+    else if (pickup.type === "health") {
+
+        if (tank.hp < MAX_HP) {
+
+            const gained = Math.max(
+                1,
+                Math.ceil(
+                    MAX_HP * HEALTH_REWARD_PERCENT / 100
+                )
+            );
+
+            tank.hp = Math.min(
+                MAX_HP,
+                tank.hp + gained
+            );
+
+            collected = true;
+
+            console.log(
+                tank.playerId,
+                "collected health:",
+                gained
+            );
+        }
+    }
+
+    // SHIELD
+
+    else if (pickup.type === "shield") {
+
+        if (tank.shieldHp < SHIELD_MAX_HP) {
+
+            tank.shieldHp = SHIELD_MAX_HP;
+            tank.shieldTimeLeft = SHIELD_DURATION;
+
+            collected = true;
+
+            console.log(
+                tank.playerId,
+                "collected shield."
+            );
+        }
+    }
+
+    // REMOVE ONLY AFTER SUCCESSFUL COLLECTION.
+
+    if (collected) {
+
+        room.pickups.delete(pickupId);
+
+        broadcast(room, snapshot(room));
+    }
+}
+
+// ======================================================
+// SHIELD DAMAGE ABSORPTION
+// Returns total damage absorbed by shield and health.
+// ======================================================
+
+function applyTankDamage(tank, damage) {
+
+    let remainingDamage = damage;
+
+    if (tank.shieldHp > 0) {
+
+        const absorbed = Math.min(
+            tank.shieldHp,
+            remainingDamage
+        );
+
+        tank.shieldHp -= absorbed;
+        remainingDamage -= absorbed;
+
+        if (tank.shieldHp <= 0) {
+
+            tank.shieldHp = 0;
+            tank.shieldTimeLeft = 0;
+        }
+    }
+
+    const healthDamage = Math.min(
+        tank.hp,
+        remainingDamage
+    );
+
+    tank.hp = Math.max(
+        0,
+        tank.hp - remainingDamage
+    );
+
+    return {
+        shieldDamage: damage - remainingDamage,
+        healthDamage,
+        totalDamage: damage - Math.max(
+            0,
+            remainingDamage - healthDamage
+        )
+    };
+}
+
+// ======================================================
 // ENEMY DAMAGE
 // ======================================================
 
@@ -734,10 +963,17 @@ function damageEnemy(room, enemy, damage) {
         enemy.hp = 0;
         enemy.alive = false;
 
+        // CREATE A PICKUP AT THE ENEMY'S DEATH POSITION.
+
+        createPickup(
+            room,
+            enemy.x,
+            enemy.y
+        );
+
         enemy.respawnAt =
             Date.now() + enemy.respawnDelay * 1000;
 
-        // Remove bullets fired by this enemy.
         room.enemyBullets = room.enemyBullets.filter(
             bullet => bullet.enemyId !== enemy.id
         );
@@ -771,15 +1007,12 @@ function updateEnemyRespawns(room) {
 
             enemy.hp = ENEMY_MAX_HP;
 
-            // Restore original position.
             enemy.x = enemy.spawnX;
             enemy.y = enemy.spawnY;
 
-            // Restore original rotations.
             enemy.a = enemy.spawnA;
             enemy.turretAngle = enemy.spawnTurretAngle;
 
-            // Restore original PathFollow2D progress.
             enemy.progress = enemy.spawnProgress;
 
             enemy.alive = true;
@@ -812,6 +1045,8 @@ function createRoom(ws, playerId) {
 
         enemies: new Map(),
         enemyBullets: [],
+
+        pickups: new Map(),
 
         running: false,
         over: false,
@@ -946,7 +1181,12 @@ function snapshot(room) {
             a: tank.angle,
             turretAngle: tank.turretAngle,
 
-            hp: tank.hp
+            hp: tank.hp,
+
+            ammo: tank.ammo,
+
+            shieldHp: tank.shieldHp,
+            shieldTimeLeft: tank.shieldTimeLeft
         })),
 
         enemies: Array.from(room.enemies.values()).map(enemy => ({
@@ -968,7 +1208,16 @@ function snapshot(room) {
         bullets: [
             ...playerBullets,
             ...enemyBullets
-        ]
+        ],
+
+        pickups: Array.from(room.pickups.values()).map(pickup => ({
+
+            id: pickup.id,
+            type: pickup.type,
+
+            x: pickup.x,
+            y: pickup.y
+        }))
     };
 }
 
@@ -1046,12 +1295,11 @@ function checkDefeatedPlayers(room) {
 
 // ======================================================
 // ENEMY BULLET SIMULATION
-// Enemy bullets can damage either player.
 // ======================================================
 
 function updateEnemyBullets(room) {
 
-    let healthChanged = false;
+    let changed = false;
 
     room.enemyBullets = room.enemyBullets.filter(bullet => {
 
@@ -1090,24 +1338,26 @@ function updateEnemyBullets(room) {
 
             if (distance <= TANK_R) {
 
-                const oldHP = tank.hp;
-
-                tank.hp = Math.max(
-                    0,
-                    tank.hp - bullet.damage
+                const result = applyTankDamage(
+                    tank,
+                    bullet.damage
                 );
 
-                healthChanged = true;
+                changed = true;
 
                 console.log(
                     "ENEMY BULLET HIT:",
                     bullet.enemyId,
                     "hit",
                     tank.playerId,
-                    "| Damage:",
-                    oldHP - tank.hp,
+                    "| Shield damage:",
+                    result.shieldDamage,
+                    "| Health damage:",
+                    result.healthDamage,
                     "| HP:",
-                    tank.hp
+                    tank.hp,
+                    "| Shield:",
+                    tank.shieldHp
                 );
 
                 return false;
@@ -1117,7 +1367,7 @@ function updateEnemyBullets(room) {
         return true;
     });
 
-    return healthChanged;
+    return changed;
 }
 
 // ======================================================
@@ -1130,15 +1380,41 @@ function step(room) {
 
     if (!a || !b) return;
 
-    // ==================================================
     // UPDATE ENEMY RESPAWNS
-    // ==================================================
 
     updateEnemyRespawns(room);
 
-    // ==================================================
+    // UPDATE PICKUP LIFETIMES
+
+    updatePickups(room);
+
+    // UPDATE SHIELD TIMERS
+
+    let shieldChanged = false;
+
+    for (const tank of room.tanks) {
+
+        if (tank.shieldHp <= 0) {
+            continue;
+        }
+
+        tank.shieldTimeLeft -= TICK;
+
+        if (tank.shieldTimeLeft <= 0) {
+
+            tank.shieldTimeLeft = 0;
+            tank.shieldHp = 0;
+
+            shieldChanged = true;
+
+            console.log(
+                tank.playerId,
+                "shield expired."
+            );
+        }
+    }
+
     // MOVE PLAYER TANKS
-    // ==================================================
 
     for (const tank of room.tanks) {
 
@@ -1225,10 +1501,16 @@ function step(room) {
 
         // PLAYER SHOOTING
 
-        if (input.fire && tank.cooldown <= 0) {
+        if (
+            input.fire &&
+            tank.cooldown <= 0 &&
+            tank.ammo > 0
+        ) {
 
             tank.cooldown = FIRE_COOLDOWN;
             tank.shots++;
+
+            tank.ammo--;
 
             const directionX = Math.cos(tank.turretAngle);
             const directionY = Math.sin(tank.turretAngle);
@@ -1251,19 +1533,15 @@ function step(room) {
         }
     }
 
-    // ==================================================
     // TANK-TO-TANK COLLISION
-    // ==================================================
 
     if (a.hp > 0 && b.hp > 0) {
         resolveTankCollision(a, b);
     }
 
-    // ==================================================
     // PLAYER BULLET MOVEMENT AND COLLISION
-    // ==================================================
 
-    let healthChanged = false;
+    let healthChanged = shieldChanged;
 
     room.bullets = room.bullets.filter(bullet => {
 
@@ -1285,7 +1563,7 @@ function step(room) {
             return false;
         }
 
-        // FIRST: CHECK ALL AI ENEMIES
+        // CHECK AI ENEMIES FIRST
 
         for (const enemy of room.enemies.values()) {
 
@@ -1306,7 +1584,11 @@ function step(room) {
 
                 const oldHP = enemy.hp;
 
-                damageEnemy(room, enemy, BULLET_DMG);
+                damageEnemy(
+                    room,
+                    enemy,
+                    BULLET_DMG
+                );
 
                 const actualDamage = oldHP - enemy.hp;
 
@@ -1318,7 +1600,7 @@ function step(room) {
             }
         }
 
-        // SECOND: CHECK THE OPPONENT
+        // CHECK OPPONENT
 
         const target = bullet.owner === a ? b : a;
 
@@ -1337,16 +1619,12 @@ function step(room) {
 
         if (distance <= TANK_R) {
 
-            const oldHP = target.hp;
-
-            target.hp = Math.max(
-                0,
-                target.hp - BULLET_DMG
+            const result = applyTankDamage(
+                target,
+                BULLET_DMG
             );
 
-            const actualDamage = oldHP - target.hp;
-
-            bullet.owner.dmgDealt += actualDamage;
+            bullet.owner.dmgDealt += result.totalDamage;
 
             healthChanged = true;
 
@@ -1355,10 +1633,14 @@ function step(room) {
                 bullet.owner.playerId,
                 "hit",
                 target.playerId,
-                "| Damage:",
-                actualDamage,
+                "| Shield damage:",
+                result.shieldDamage,
+                "| Health damage:",
+                result.healthDamage,
                 "| HP:",
-                target.hp
+                target.hp,
+                "| Shield:",
+                target.shieldHp
             );
 
             return false;
@@ -1367,25 +1649,19 @@ function step(room) {
         return true;
     });
 
-    // ==================================================
     // ENEMY BULLETS
-    // ==================================================
 
     if (updateEnemyBullets(room)) {
         healthChanged = true;
     }
 
-    // ==================================================
-    // HEALTH SYNCHRONIZATION
-    // ==================================================
+    // SYNCHRONIZE CHANGED STATE
 
     if (healthChanged) {
         broadcast(room, snapshot(room));
     }
 
-    // ==================================================
     // CHECK PLAYER DEATHS
-    // ==================================================
 
     checkDefeatedPlayers(room);
 }
@@ -1433,18 +1709,13 @@ wss.on("connection", ws => {
         let message;
 
         try {
-
             message = JSON.parse(raw.toString());
-
         } catch {
-
             sendError(ws, "Invalid message format.");
             return;
         }
 
-        // ==============================================
         // HOST
-        // ==============================================
 
         if (message.type === "host") {
 
@@ -1458,7 +1729,6 @@ wss.on("connection", ws => {
                 !message.playerId ||
                 message.playerId.length > 64
             ) {
-
                 sendError(ws, "Invalid player ID.");
                 return;
             }
@@ -1474,9 +1744,7 @@ wss.on("connection", ws => {
             return;
         }
 
-        // ==============================================
-        // JOIN
-        // ==============================================
+        // JOIN ROOM
 
         if (message.type === "join_room") {
 
@@ -1490,7 +1758,6 @@ wss.on("connection", ws => {
                 !message.playerId ||
                 message.playerId.length > 64
             ) {
-
                 sendError(ws, "Invalid player ID.");
                 return;
             }
@@ -1518,9 +1785,7 @@ wss.on("connection", ws => {
             return;
         }
 
-        // ==============================================
         // PLAYER INPUT
-        // ==============================================
 
         if (
             message.type === "input" &&
@@ -1568,16 +1833,39 @@ wss.on("connection", ws => {
                 typeof input.turretAngle === "number" &&
                 Number.isFinite(input.turretAngle)
             ) {
-
                 tank.turretAngle = input.turretAngle;
             }
 
             return;
         }
 
-        // ==============================================
+        // COLLECT PICKUP
+
+        if (
+            message.type === "collect_pickup" &&
+            tank &&
+            room &&
+            room.running &&
+            !room.over
+        ) {
+
+            if (
+                typeof message.pickupId !== "string" ||
+                message.pickupId.length > 64
+            ) {
+                return;
+            }
+
+            collectPickup(
+                room,
+                tank,
+                message.pickupId
+            );
+
+            return;
+        }
+
         // HOST AI ENEMY UPDATES
-        // ==============================================
 
         if (
             message.type === "enemy_update" &&
@@ -1587,7 +1875,6 @@ wss.on("connection", ws => {
             !room.over
         ) {
 
-            // Only Player 1 / room host controls AI.
             if (room.tanks[0] !== tank) {
                 return;
             }
@@ -1597,9 +1884,7 @@ wss.on("connection", ws => {
             return;
         }
 
-        // ==============================================
         // HOST AI ENEMY SHOOTING
-        // ==============================================
 
         if (
             message.type === "enemy_shot" &&
@@ -1609,7 +1894,6 @@ wss.on("connection", ws => {
             !room.over
         ) {
 
-            // Only the host can create AI bullets.
             if (room.tanks[0] !== tank) {
                 return;
             }
@@ -1620,9 +1904,7 @@ wss.on("connection", ws => {
         }
     });
 
-    // ==============================================
     // DISCONNECT
-    // ==============================================
 
     ws.on("close", () => {
 
@@ -1655,9 +1937,7 @@ wss.on("connection", ws => {
         }
     });
 
-    // ==============================================
     // WEBSOCKET ERROR
-    // ==============================================
 
     ws.on("error", error => {
 
