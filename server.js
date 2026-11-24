@@ -99,9 +99,6 @@ const ENEMY_MAX_HP = 100;
 const ENEMY_RADIUS = 22;
 const ENEMY_RESPAWN_DELAY = 2.0;
 
-// Stable network IDs.
-// These are not Godot node names.
-
 const ENEMY_IDS = [
     "enemy_1",
     "enemy_2",
@@ -109,8 +106,6 @@ const ENEMY_IDS = [
     "enemy_mg_1",
     "enemy_mg_2"
 ];
-
-// Enemy bullet properties match the Godot scripts.
 
 const ENEMY_BULLETS = {
     normal: {
@@ -571,12 +566,19 @@ function initializeEnemies(room, updates) {
             x,
             y,
 
+            // Original spawn position.
             spawnX: x,
             spawnY: y,
 
+            // Current rotations.
             a: angle,
             turretAngle,
 
+            // Original spawn rotations.
+            spawnA: angle,
+            spawnTurretAngle: turretAngle,
+
+            // Path progress.
             progress,
             spawnProgress: progress,
 
@@ -707,7 +709,7 @@ function createEnemyBullet(room, message) {
 // ENEMY DAMAGE
 // ======================================================
 
-function damageEnemy(enemy, damage) {
+function damageEnemy(room, enemy, damage) {
 
     if (!enemy || !enemy.alive) {
         return false;
@@ -729,10 +731,16 @@ function damageEnemy(enemy, damage) {
 
     if (enemy.hp <= 0) {
 
+        enemy.hp = 0;
         enemy.alive = false;
 
         enemy.respawnAt =
             Date.now() + enemy.respawnDelay * 1000;
+
+        // Remove bullets fired by this enemy.
+        room.enemyBullets = room.enemyBullets.filter(
+            bullet => bullet.enemyId !== enemy.id
+        );
 
         console.log(
             enemy.id,
@@ -762,15 +770,27 @@ function updateEnemyRespawns(room) {
         if (now >= enemy.respawnAt) {
 
             enemy.hp = ENEMY_MAX_HP;
-            enemy.alive = true;
 
+            // Restore original position.
             enemy.x = enemy.spawnX;
             enemy.y = enemy.spawnY;
+
+            // Restore original rotations.
+            enemy.a = enemy.spawnA;
+            enemy.turretAngle = enemy.spawnTurretAngle;
+
+            // Restore original PathFollow2D progress.
             enemy.progress = enemy.spawnProgress;
 
+            enemy.alive = true;
             enemy.respawnAt = 0;
 
-            console.log(enemy.id, "respawned.");
+            console.log(
+                enemy.id,
+                "respawned with",
+                enemy.hp,
+                "HP."
+            );
         }
     }
 }
@@ -1286,7 +1306,7 @@ function step(room) {
 
                 const oldHP = enemy.hp;
 
-                damageEnemy(enemy, BULLET_DMG);
+                damageEnemy(room, enemy, BULLET_DMG);
 
                 const actualDamage = oldHP - enemy.hp;
 
