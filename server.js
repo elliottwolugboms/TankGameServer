@@ -1,4 +1,3 @@
-
 const { WebSocketServer } = require("ws");
 const crypto = require("crypto");
 const fs = require("fs");
@@ -117,10 +116,43 @@ function lerpAngle(from, to, weight) {
 }
 
 // ======================================================
+// BULLET COLLISION HELPER
+// Checks the entire path travelled by a bullet.
+// ======================================================
+
+function distanceToSegment(px, py, x1, y1, x2, y2) {
+
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+
+    const lengthSquared = dx * dx + dy * dy;
+
+    if (lengthSquared === 0) {
+        return Math.hypot(px - x1, py - y1);
+    }
+
+    let t = (
+        (px - x1) * dx +
+        (py - y1) * dy
+    ) / lengthSquared;
+
+    t = Math.max(0, Math.min(1, t));
+
+    const closestX = x1 + t * dx;
+    const closestY = y1 + t * dy;
+
+    return Math.hypot(
+        px - closestX,
+        py - closestY
+    );
+}
+
+// ======================================================
 // MAP BOUNDARIES
 // ======================================================
 
 function keepTankInsideMap(tank) {
+
     const minX = MAP_LEFT + TANK_R;
     const maxX = MAP_RIGHT - TANK_R;
 
@@ -153,6 +185,7 @@ function keepTankInsideMap(tank) {
 // ======================================================
 
 function isRoadAt(worldX, worldY) {
+
     const column = Math.floor(
         (worldX - ROAD_LEFT) / ROAD_CELL_SIZE
     );
@@ -690,8 +723,6 @@ function step(room) {
 
             room.bullets.push({
 
-                // NEW: UNIQUE BULLET ID
-
                 id: crypto.randomUUID(),
 
                 x: tank.x + directionX * 30,
@@ -716,7 +747,12 @@ function step(room) {
     // BULLET MOVEMENT AND COLLISION
     // ==================================================
 
+    let healthChanged = false;
+
     room.bullets = room.bullets.filter(bullet => {
+
+        const previousX = bullet.x;
+        const previousY = bullet.y;
 
         bullet.x += bullet.vx * TICK;
         bullet.y += bullet.vy * TICK;
@@ -735,25 +771,54 @@ function step(room) {
 
         const target = bullet.owner === a ? b : a;
 
-        const distance = Math.hypot(
-            target.x - bullet.x,
-            target.y - bullet.y
+        const distance = distanceToSegment(
+            target.x,
+            target.y,
+            previousX,
+            previousY,
+            bullet.x,
+            bullet.y
         );
 
-        if (distance < TANK_R) {
+        if (distance <= TANK_R) {
+
+            const oldHP = target.hp;
 
             target.hp = Math.max(
                 0,
                 target.hp - BULLET_DMG
             );
 
-            bullet.owner.dmgDealt += BULLET_DMG;
+            const actualDamage = oldHP - target.hp;
+
+            bullet.owner.dmgDealt += actualDamage;
+
+            healthChanged = true;
+
+            console.log(
+                "BULLET HIT:",
+                bullet.owner.playerId,
+                "hit",
+                target.playerId,
+                "| Damage:",
+                actualDamage,
+                "| HP remaining:",
+                target.hp
+            );
 
             return false;
         }
 
         return true;
     });
+
+    // ==================================================
+    // IMMEDIATE HEALTH SYNCHRONIZATION
+    // ==================================================
+
+    if (healthChanged) {
+        broadcast(room, snapshot(room));
+    }
 
     // ==================================================
     // CHECK DEFEATED PLAYERS
@@ -805,8 +870,6 @@ function snapshot(room) {
 
             hp: tank.hp
         })),
-
-        // NEW: BULLET ID, POSITION AND DIRECTION
 
         bullets: room.bullets.map(bullet => ({
 
