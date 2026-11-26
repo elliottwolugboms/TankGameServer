@@ -809,8 +809,6 @@ function collectPickup(room, tank, pickupId) {
 
     let collected = false;
 
-    // AMMO
-
     if (pickup.type === "ammo") {
 
         if (tank.ammo < tank.maxAmmo) {
@@ -822,17 +820,8 @@ function collectPickup(room, tank, pickupId) {
 
             tank.ammo += gained;
             collected = true;
-
-            console.log(
-                tank.playerId,
-                "collected",
-                gained,
-                "bullets."
-            );
         }
     }
-
-    // HEALTH
 
     else if (pickup.type === "health") {
 
@@ -851,16 +840,8 @@ function collectPickup(room, tank, pickupId) {
             );
 
             collected = true;
-
-            console.log(
-                tank.playerId,
-                "collected health:",
-                gained
-            );
         }
     }
-
-    // SHIELD
 
     else if (pickup.type === "shield") {
 
@@ -870,15 +851,8 @@ function collectPickup(room, tank, pickupId) {
             tank.shieldTimeLeft = SHIELD_DURATION;
 
             collected = true;
-
-            console.log(
-                tank.playerId,
-                "collected shield."
-            );
         }
     }
-
-    // REMOVE ONLY AFTER SUCCESSFUL COLLECTION.
 
     if (collected) {
 
@@ -890,7 +864,6 @@ function collectPickup(room, tank, pickupId) {
 
 // ======================================================
 // SHIELD DAMAGE ABSORPTION
-// Returns total damage absorbed by shield and health.
 // ======================================================
 
 function applyTankDamage(tank, damage) {
@@ -949,21 +922,10 @@ function damageEnemy(room, enemy, damage) {
         enemy.hp - damage
     );
 
-    console.log(
-        "ENEMY HIT:",
-        enemy.id,
-        "| Damage:",
-        damage,
-        "| HP:",
-        enemy.hp
-    );
-
     if (enemy.hp <= 0) {
 
         enemy.hp = 0;
         enemy.alive = false;
-
-        // CREATE A PICKUP AT THE ENEMY'S DEATH POSITION.
 
         createPickup(
             room,
@@ -976,13 +938,6 @@ function damageEnemy(room, enemy, damage) {
 
         room.enemyBullets = room.enemyBullets.filter(
             bullet => bullet.enemyId !== enemy.id
-        );
-
-        console.log(
-            enemy.id,
-            "destroyed. Respawning in",
-            enemy.respawnDelay,
-            "seconds."
         );
     }
 
@@ -1017,13 +972,6 @@ function updateEnemyRespawns(room) {
 
             enemy.alive = true;
             enemy.respawnAt = 0;
-
-            console.log(
-                enemy.id,
-                "respawned with",
-                enemy.hp,
-                "HP."
-            );
         }
     }
 }
@@ -1059,8 +1007,6 @@ function createRoom(ws, playerId) {
 
     room.tanks.push(tank);
     rooms.set(roomCode, room);
-
-    console.log("Room created:", roomCode);
 
     send(ws, {
         type: "room_created",
@@ -1106,8 +1052,6 @@ function joinRoom(ws, playerId, roomCode) {
     tank.ws = ws;
 
     room.tanks.push(tank);
-
-    console.log("Player joined room:", roomCode);
 
     send(ws, {
         type: "joined",
@@ -1353,11 +1297,7 @@ function updateEnemyBullets(room) {
                     "| Shield damage:",
                     result.shieldDamage,
                     "| Health damage:",
-                    result.healthDamage,
-                    "| HP:",
-                    tank.hp,
-                    "| Shield:",
-                    tank.shieldHp
+                    result.healthDamage
                 );
 
                 return false;
@@ -1380,15 +1320,8 @@ function step(room) {
 
     if (!a || !b) return;
 
-    // UPDATE ENEMY RESPAWNS
-
     updateEnemyRespawns(room);
-
-    // UPDATE PICKUP LIFETIMES
-
     updatePickups(room);
-
-    // UPDATE SHIELD TIMERS
 
     let shieldChanged = false;
 
@@ -1406,11 +1339,6 @@ function step(room) {
             tank.shieldHp = 0;
 
             shieldChanged = true;
-
-            console.log(
-                tank.playerId,
-                "shield expired."
-            );
         }
     }
 
@@ -1482,8 +1410,6 @@ function step(room) {
             }
         }
 
-        // ROAD-ONLY MOVEMENT
-
         moveTankOnRoad(
             tank,
             tank.vx * TICK,
@@ -1492,14 +1418,10 @@ function step(room) {
 
         keepTankInsideMap(tank);
 
-        // SHOOTING COOLDOWN
-
         tank.cooldown = Math.max(
             0,
             tank.cooldown - TICK
         );
-
-        // PLAYER SHOOTING
 
         if (
             input.fire &&
@@ -1533,13 +1455,13 @@ function step(room) {
         }
     }
 
-    // TANK-TO-TANK COLLISION
+    // TANK COLLISION
 
     if (a.hp > 0 && b.hp > 0) {
         resolveTankCollision(a, b);
     }
 
-    // PLAYER BULLET MOVEMENT AND COLLISION
+    // PLAYER BULLETS
 
     let healthChanged = shieldChanged;
 
@@ -1563,7 +1485,7 @@ function step(room) {
             return false;
         }
 
-        // CHECK AI ENEMIES FIRST
+        // AI ENEMIES
 
         for (const enemy of room.enemies.values()) {
 
@@ -1600,7 +1522,7 @@ function step(room) {
             }
         }
 
-        // CHECK OPPONENT
+        // OPPONENT
 
         const target = bullet.owner === a ? b : a;
 
@@ -1628,21 +1550,6 @@ function step(room) {
 
             healthChanged = true;
 
-            console.log(
-                "PLAYER BULLET HIT:",
-                bullet.owner.playerId,
-                "hit",
-                target.playerId,
-                "| Shield damage:",
-                result.shieldDamage,
-                "| Health damage:",
-                result.healthDamage,
-                "| HP:",
-                target.hp,
-                "| Shield:",
-                target.shieldHp
-            );
-
             return false;
         }
 
@@ -1655,13 +1562,9 @@ function step(room) {
         healthChanged = true;
     }
 
-    // SYNCHRONIZE CHANGED STATE
-
     if (healthChanged) {
         broadcast(room, snapshot(room));
     }
-
-    // CHECK PLAYER DEATHS
 
     checkDefeatedPlayers(room);
 }
@@ -1715,7 +1618,9 @@ wss.on("connection", ws => {
             return;
         }
 
+        // ======================================================
         // HOST
+        // ======================================================
 
         if (message.type === "host") {
 
@@ -1744,7 +1649,9 @@ wss.on("connection", ws => {
             return;
         }
 
+        // ======================================================
         // JOIN ROOM
+        // ======================================================
 
         if (message.type === "join_room") {
 
@@ -1785,7 +1692,81 @@ wss.on("connection", ws => {
             return;
         }
 
+        // ======================================================
+        // QUIT ONLINE GAME
+        // ======================================================
+
+        if (message.type === "quit") {
+
+            if (!tank || !room) {
+
+                send(ws, {
+                    type: "quit_ack"
+                });
+
+                ws.close(1000, "Player left");
+                return;
+            }
+
+            console.log(
+                tank.playerId,
+                "left room:",
+                room.roomCode
+            );
+
+            if (room.running && !room.over) {
+
+                const opponent = room.tanks.find(
+                    other => other !== tank
+                );
+
+                if (opponent) {
+
+                    finish(
+                        room,
+                        opponent,
+                        "forfeit"
+                    );
+
+                } else {
+
+                    room.over = true;
+                    room.running = false;
+
+                    rooms.delete(room.roomCode);
+                }
+
+            } else {
+
+                room.over = true;
+                room.running = false;
+
+                rooms.delete(room.roomCode);
+            }
+
+            // Send confirmation before closing.
+            send(ws, {
+                type: "quit_ack"
+            });
+
+            // Stop this connection from being processed
+            // again by the disconnect handler.
+            tank.ws = null;
+
+            tank = null;
+            room = null;
+
+            ws.close(
+                1000,
+                "Player left the game"
+            );
+
+            return;
+        }
+
+        // ======================================================
         // PLAYER INPUT
+        // ======================================================
 
         if (
             message.type === "input" &&
@@ -1839,7 +1820,9 @@ wss.on("connection", ws => {
             return;
         }
 
+        // ======================================================
         // COLLECT PICKUP
+        // ======================================================
 
         if (
             message.type === "collect_pickup" &&
@@ -1865,7 +1848,9 @@ wss.on("connection", ws => {
             return;
         }
 
+        // ======================================================
         // HOST AI ENEMY UPDATES
+        // ======================================================
 
         if (
             message.type === "enemy_update" &&
@@ -1884,7 +1869,9 @@ wss.on("connection", ws => {
             return;
         }
 
+        // ======================================================
         // HOST AI ENEMY SHOOTING
+        // ======================================================
 
         if (
             message.type === "enemy_shot" &&
@@ -1904,7 +1891,9 @@ wss.on("connection", ws => {
         }
     });
 
+    // ======================================================
     // DISCONNECT
+    // ======================================================
 
     ws.on("close", () => {
 
@@ -1937,7 +1926,9 @@ wss.on("connection", ws => {
         }
     });
 
+    // ======================================================
     // WEBSOCKET ERROR
+    // ======================================================
 
     ws.on("error", error => {
 
